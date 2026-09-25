@@ -29,6 +29,8 @@ class StreamEngine(private val context: Context) : ConnectChecker {
     @Volatile var facing: Facing = Facing.BACK; private set
     @Volatile var fps: Int = 0; private set
     @Volatile var lastFrameAtMs: Long = 0; private set
+    /** True when the RTSP server could not bind its port. The server binds after [start] returns. */
+    @Volatile var rtspFailed = false; private set
 
     @Volatile private var camera: RtspServerCamera1? = null
     private val grabLock = Any()
@@ -44,6 +46,7 @@ class StreamEngine(private val context: Context) : ConnectChecker {
      */
     fun start(s: Settings): Boolean {
         stop()
+        rtspFailed = false
         var cam: RtspServerCamera1? = null
         try {
             val wantedId = CameraProbe.findId(s.facing)
@@ -85,7 +88,11 @@ class StreamEngine(private val context: Context) : ConnectChecker {
     }
 
     fun stop() {
-        val cam = camera ?: return
+        val cam = camera ?: run {
+            // A user stop after a failed start must not leave the ERROR state.
+            if (state == EngineState.ERROR) state = EngineState.STOPPED
+            return
+        }
         camera = null
         try {
             if (cam.isLanternEnabled) cam.disableLantern()
@@ -99,7 +106,11 @@ class StreamEngine(private val context: Context) : ConnectChecker {
     }
 
     fun setBitrate(bitrate: Int) {
-        camera?.setVideoBitrateOnFly(bitrate)
+        try {
+            camera?.setVideoBitrateOnFly(bitrate)
+        } catch (e: RuntimeException) {
+            lastError = "bitrate change failed: ${e.message}"
+        }
     }
 
     fun setTorch(on: Boolean) {
@@ -155,7 +166,13 @@ class StreamEngine(private val context: Context) : ConnectChecker {
     override fun onConnectionSuccess() {}
     override fun onConnectionFailed(reason: String) {
         Log.w(TAG, "rtsp: $reason")
-        lastError = "rtsp: $reason"
+        if (reason.contains("Server creation failed")) {
+            // The RTSP server reports a failed port bind only here. The service restarts the engine.
+            rtspFailed = true
+            lastError = "RTSP port not available: $reason"
+        } else {
+            lastError = "rtsp: $reason"
+        }
     }
     override fun onNewBitrate(bitrate: Long) {}
     override fun onDisconnect() {}

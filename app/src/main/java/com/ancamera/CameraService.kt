@@ -52,10 +52,11 @@ class CameraService : Service(), HttpBackend {
     private val settingsLock = Any()
     @Volatile private var settings = Settings()
     @Volatile private var caps = Capabilities(emptyMap())
-    private var http: HttpServer? = null
+    @Volatile private var http: HttpServer? = null
     @Volatile private var httpError: String? = null
     private var indexHtml = ByteArray(0)
     private val backoff = Backoff()
+    private val httpBackoff = Backoff()
     private var wakeLock: PowerManager.WakeLock? = null
     private var wifiLock: WifiManager.WifiLock? = null
     private var startedAtMs = 0L
@@ -66,14 +67,23 @@ class CameraService : Service(), HttpBackend {
         if (!running) return@Runnable
         startEngine()
     }
+    private val httpRetry = Runnable {
+        if (!running || http != null) return@Runnable
+        startHttp()
+    }
     private val tick = object : Runnable {
         override fun run() {
             if (!running) return
             val now = SystemClock.elapsedRealtime()
             if (engine.state == EngineState.STREAMING) {
-                if (Watchdog.isStalled(true, engine.lastFrameAtMs, now)) {
+                if (engine.rtspFailed) {
+                    Log.w(TAG, "${engine.lastError}, restarting the engine")
+                    engine.stop()
+                    scheduleRetry()
+                } else if (Watchdog.isStalled(true, engine.lastFrameAtMs, now)) {
                     Log.w(TAG, "no frames for ${Watchdog.STALL_MS} ms, restarting the engine")
-                    startEngine()
+                    engine.stop()
+                    scheduleRetry()
                 } else if (engine.fps > 0) {
                     backoff.reset()
                 }
@@ -93,6 +103,13 @@ class CameraService : Service(), HttpBackend {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (intent == null && Build.VERSION.SDK_INT >= 30) {
+            // A sticky restart runs in the background. API 30+ does not give camera access to it,
+            // so tell the user and stop. A sticky restart does not need startForeground.
+            showStoppedNotification()
+            stopSelf()
+            return START_NOT_STICKY
+        }
         if (!enterForeground()) {
             stopSelf()
             return START_NOT_STICKY
@@ -132,24 +149,38 @@ class CameraService : Service(), HttpBackend {
         if (!running) return
         main.removeCallbacks(retry)
         if (!engine.start(settings)) {
-            val delay = backoff.nextDelayMs()
-            Log.w(TAG, "engine start failed (${engine.lastError}), retry in $delay ms")
-            main.postDelayed(retry, delay)
+            Log.w(TAG, "engine start failed (${engine.lastError})")
+            scheduleRetry()
         }
         updateNotification()
     }
 
-    private fun startHttp() {
-        try {
+    /** Starts the engine again after the next back-off delay. */
+    private fun scheduleRetry() {
+        main.removeCallbacks(retry)
+        val delay = backoff.nextDelayMs()
+        Log.w(TAG, "engine retry in $delay ms")
+        main.postDelayed(retry, delay)
+    }
+
+    /** Returns false when the port is not available. Then a retry starts after a back-off delay. */
+    private fun startHttp(): Boolean {
+        main.removeCallbacks(httpRetry)
+        val ok = try {
             val server = HttpServer(settings.httpPort, Router(this, indexHtml), this)
             server.start()
             http = server
             httpError = null
+            httpBackoff.reset()
+            true
         } catch (e: IOException) {
             httpError = "HTTP port ${settings.httpPort} not available: ${e.message}"
             Log.e(TAG, httpError!!)
+            if (running) main.postDelayed(httpRetry, httpBackoff.nextDelayMs())
+            false
         }
         updateNotification()
+        return ok
     }
 
     private fun reloadFromStore() {
@@ -176,7 +207,16 @@ class CameraService : Service(), HttpBackend {
                 if (old.httpPort != new.httpPort) {
                     http?.stop()
                     http = null
-                    startHttp()
+                    if (!startHttp()) {
+                        // The new port is not available. Go back to the old port.
+                        synchronized(settingsLock) {
+                            settings = settings.copy(httpPort = old.httpPort)
+                            store.save(settings)
+                        }
+                        startHttp()
+                        httpError = "HTTP port ${new.httpPort} not available, kept ${old.httpPort}"
+                        Log.e(TAG, httpError!!)
+                    }
                 }
                 startEngine() // RTSP port and RTSP credentials are set when the engine starts
             }
@@ -251,14 +291,15 @@ class CameraService : Service(), HttpBackend {
         val s = settings
         val ip = Net.lanIpv4() ?: "no network"
         val stream = when (engine.state) {
-            EngineState.STREAMING -> "rtsp://$ip:${s.rtspPort}/ · ${engine.fps} fps · ${engine.rtspClients} RTSP viewer(s)"
+            EngineState.STREAMING -> "rtsp://$ip:${s.rtspPort}/ · ${engine.fps} fps · ${engine.rtspClients} RTSP viewer(s)" +
+                (engine.lastError?.let { " · $it" } ?: "")
             EngineState.ERROR -> "Error: ${engine.lastError}"
             EngineState.STOPPED -> "Starting…"
         }
         return httpError?.let { "$stream · $it" } ?: stream
     }
 
-    private fun buildNotification(text: String): Notification {
+    private fun buildNotification(text: String, ongoing: Boolean = true): Notification {
         val open = PendingIntent.getActivity(
             this, 0, Intent(this, MainActivity::class.java),
             if (Build.VERSION.SDK_INT >= 23) PendingIntent.FLAG_IMMUTABLE else 0,
@@ -274,16 +315,27 @@ class CameraService : Service(), HttpBackend {
             .setContentTitle("ancamera")
             .setContentText(text)
             .setContentIntent(open)
-            .setOngoing(true)
+            .setOngoing(ongoing)
+            .setAutoCancel(!ongoing)
             .build()
     }
 
-    /** Returns false when Android does not allow a camera foreground service now (API 34+ from background). */
-    private fun enterForeground(): Boolean {
+    private fun createChannel() {
         if (Build.VERSION.SDK_INT >= 26) {
             val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
             nm.createNotificationChannel(NotificationChannel(CHANNEL_ID, "Streaming", NotificationManager.IMPORTANCE_LOW))
         }
+    }
+
+    private fun showStoppedNotification() {
+        createChannel()
+        val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        nm.notify(STOPPED_NOTIFICATION_ID, buildNotification("ancamera stopped. Tap to start streaming again.", ongoing = false))
+    }
+
+    /** Returns false when Android does not allow a camera foreground service now (API 34+ from background). */
+    private fun enterForeground(): Boolean {
+        createChannel()
         val n = buildNotification(notificationText())
         return try {
             if (Build.VERSION.SDK_INT >= 30) {
@@ -333,6 +385,7 @@ class CameraService : Service(), HttpBackend {
         private const val TAG = "CameraService"
         private const val CHANNEL_ID = "stream"
         private const val NOTIFICATION_ID = 1
+        private const val STOPPED_NOTIFICATION_ID = 2
         private const val TICK_MS = 2_000L
         private const val SERVER_RESTART_DELAY_MS = 500L
         const val ACTION_RELOAD = "com.ancamera.action.RELOAD"
