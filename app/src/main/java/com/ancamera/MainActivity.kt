@@ -17,14 +17,13 @@ import android.widget.TextView
 import android.widget.Toast
 import com.ancamera.settings.Capabilities
 import com.ancamera.settings.PatchResult
-import com.ancamera.settings.Settings
 import com.ancamera.settings.SettingsRules
 import com.ancamera.settings.SettingsStore
 
 /**
  * Start/stop, stream URLs and the phone-only password setting.
- * adb extras (for scripts/device-test.sh): --ez resetSettings true, --es username U --es password P,
- * --ez autostart true.
+ * adb extra (for scripts/device-test.sh): --ez autostart true, on a fresh launch only.
+ * The reset and login extras go to AdbCommandActivity instead, which needs the DUMP permission.
  */
 class MainActivity : Activity() {
     private val main = Handler(Looper.getMainLooper())
@@ -67,13 +66,17 @@ class MainActivity : Activity() {
         column.addView(pass)
         column.addView(save)
         setContentView(ScrollView(this).apply { addView(column) })
-        handleExtras(intent)
+        if (savedInstanceState == null && !isFromHistory(intent)) handleExtras(intent)
     }
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
-        handleExtras(intent)
+        if (!isFromHistory(intent)) handleExtras(intent)
     }
+
+    /** True when the intent relaunches the activity from Recents, not from a fresh adb command. */
+    private fun isFromHistory(intent: Intent?): Boolean =
+        (intent?.flags ?: 0) and Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY != 0
 
     override fun onResume() {
         super.onResume()
@@ -87,13 +90,6 @@ class MainActivity : Activity() {
 
     private fun handleExtras(intent: Intent?) {
         intent ?: return
-        if (intent.getBooleanExtra("resetSettings", false)) {
-            store.save(Settings())
-            CameraService.reload(this)
-        }
-        if (intent.hasExtra("username") || intent.hasExtra("password")) {
-            saveCredentials(intent.getStringExtra("username") ?: "", intent.getStringExtra("password") ?: "")
-        }
         if (intent.getBooleanExtra("autostart", false) && !CameraService.running) startWithPermissions()
     }
 

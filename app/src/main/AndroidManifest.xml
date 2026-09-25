@@ -25,6 +25,15 @@
             </intent-filter>
         </activity>
 
+        <activity
+            android:name=".AdbCommandActivity"
+            android:exported="true"
+            android:permission="android.permission.DUMP"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:taskAffinity=""
+            android:theme="@android:style/Theme.Translucent.NoTitleBar" />
+
         <service
             android:name=".CameraService"
             android:exported="false"

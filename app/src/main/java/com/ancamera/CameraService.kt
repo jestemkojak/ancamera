@@ -62,9 +62,13 @@ class CameraService : Service(), HttpBackend {
     private var started = false
     private var lastNotificationText: String? = null
 
-    private val retry = Runnable { startEngine() }
+    private val retry = Runnable {
+        if (!running) return@Runnable
+        startEngine()
+    }
     private val tick = object : Runnable {
         override fun run() {
+            if (!running) return
             val now = SystemClock.elapsedRealtime()
             if (engine.state == EngineState.STREAMING) {
                 if (Watchdog.isStalled(true, engine.lastFrameAtMs, now)) {
@@ -125,6 +129,7 @@ class CameraService : Service(), HttpBackend {
     // ---- engine and server ----
 
     private fun startEngine() {
+        if (!running) return
         main.removeCallbacks(retry)
         if (!engine.start(settings)) {
             val delay = backoff.nextDelayMs()
@@ -159,6 +164,7 @@ class CameraService : Service(), HttpBackend {
     }
 
     private fun apply(old: Settings, new: Settings, kind: ApplyKind) {
+        if (!running) return
         when (kind) {
             ApplyKind.NONE -> {}
             ApplyKind.LIVE -> {
