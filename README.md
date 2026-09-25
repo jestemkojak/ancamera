@@ -17,6 +17,8 @@ Turn an old Android phone (Android 4.4+) into a LAN monitoring camera.
 
 The first password can be set only on the phone. After that, the web page can change it.
 
+The web server accepts only LAN clients, but the RTSP server does not filter addresses, so keep the phone on a private network.
+
 ## Build
 
 Needs the Android SDK with platform 37 and JDK 21.
@@ -29,8 +31,10 @@ Needs the Android SDK with platform 37 and JDK 21.
 
 ```bash
 scripts/device-test.sh <adb-serial>   # end-to-end checks through adb port forwarding
-scripts/soak.sh <adb-serial> 30       # 30 minutes with the screen off
+scripts/soak.sh <adb-serial> 30 <phone-wifi-ip>   # 30 minutes with the screen off, over Wi-Fi
 ```
+
+For the real soak test, give the phone's Wi-Fi IP. Without it, `soak.sh` reads the streams through adb port forwarding, and the test does not use Wi-Fi.
 
 Do not use an API 19 emulator for video tests: its H.264 encoder does not work.
 Design: `docs/superpowers/specs/2026-09-25-ancamera-design.md`.

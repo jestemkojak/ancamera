@@ -91,6 +91,13 @@ One camera and one H.264 encoder feed RTSP. MJPEG and snapshots get frames from 
 
 When a password is set, all paths need Basic auth.
 
+Before auth, the server does these checks against DNS rebinding and cross-site requests:
+- The `Host` header must be an IP literal, `localhost`, or a name that ends with `.local`, `.lan`, `.home.arpa` or `.internal`. Otherwise `403`. A request with no `Host` header is allowed.
+- `POST /api/settings` needs `Content-Type: application/json`. Otherwise `415`.
+- A `POST` with an `Origin` header must come from the same host and port. Otherwise `403`.
+- The server closes connections from addresses that are not loopback, private, link-local or IPv6 unique local, with no response. The RTSP server does not filter addresses.
+- The full request must arrive in 10 s. Otherwise the server closes the connection.
+
 | Method + path | Result |
 |---|---|
 | `GET /` | Web page (`assets/index.html`, inline JS, no CDN). Live MJPEG view and settings form. |
@@ -131,13 +138,14 @@ The web page cannot set a password when no password is set. Only `MainActivity` 
 |---|---|
 | Camera open fails | Status `error`. Retry after 2 s, 5 s, 10 s, 30 s, then every 60 s. The notification and `/api/status` show the last error. |
 | Encoder crash | The library restarts the encoder. If frames stop, the watchdog below does a full engine restart. The app does not use the library `CodecErrorCallback`: its signature uses `MediaCodec.CodecException`, which exists only from API 21. |
-| No frames for 10 s while streaming | Watchdog does a full engine restart. The frame signal is the library fps callback, which fires once for each encoded frame. |
+| No frames for 10 s while streaming | Watchdog does a full engine restart with back-off. The frame signal is the library fps callback. It fires about once each second while the encoder makes frames (not once for each frame). |
 | Saved settings not valid at start | Use the defaults and log the problem. |
 | Chosen camera missing | Use camera ID 0 and report this in the status. |
-| Port in use | Report in the notification and the status. Do not crash. |
+| Port in use | Report in the notification and the status. Do not crash. HTTP port: if a changed port is not available, go back to the old port and show "HTTP port <new> not available, kept <old>". If the HTTP server does not run, retry with back-off. |
+| RTSP port not available | The status and the notification show the error. The engine restarts with back-off. |
 | Wi-Fi IP changes | No restart (servers listen on `0.0.0.0`). The activity and the notification show the current IP. |
 | Battery above 45 °C | Warning in the status only. |
-| The system kills the service | `START_STICKY` restarts it. |
+| The system kills the service | API 19-29: `START_STICKY` restarts it. API 30+: Android does not allow camera access from a restart in the background; the service shows a notification "Tap to start streaming again" and stops. |
 
 ## 7. Testing
 
@@ -147,6 +155,7 @@ The web page cannot set a password when no password is set. Only `MainActivity` 
    - `adb shell dumpsys media.camera`: the chosen camera ID is open.
    - `/snapshot.jpg` gives a valid JPEG. `/mjpeg` gives at least 2 parts. `/api/status` gives valid JSON.
    - `POST /api/settings` with a new resolution, then `ffprobe` shows the new size.
+   - A changed RTSP port and a changed HTTP port work, and the old ports work again after the change back.
    - With auth on: `401` without credentials, `200` with credentials, RTSP works with credentials.
 3. Test targets: LG G3 (API 19) and the API 34 emulator. Do not use the API 19 emulator.
 4. Screen-off soak on the G3: 30 minutes with the screen off. Record the frame count and the battery temperature.
