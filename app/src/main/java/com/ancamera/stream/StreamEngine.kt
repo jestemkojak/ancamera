@@ -32,26 +32,31 @@ class StreamEngine(private val context: Context) : ConnectChecker {
 
     @Volatile private var camera: RtspServerCamera1? = null
     private val grabLock = Any()
-    private var lastJpeg: ByteArray? = null
-    private var lastJpegAtMs = 0L
+    private class CachedJpeg(val cam: RtspServerCamera1, val jpeg: ByteArray, val atMs: Long)
+    @Volatile private var cache: CachedJpeg? = null
 
     val rtspClients: Int get() = camera?.streamClient?.getNumClients() ?: 0
 
-    /** Stops any running stream, then starts with [s]. Returns false and sets [lastError] on failure. */
+    /**
+     * Stops any running stream, then starts with [s]. Returns false and sets [lastError] on
+     * failure. Every camera or library error is caught here, so [camera] is set only after a
+     * full, working start. No exception reaches the caller.
+     */
     fun start(s: Settings): Boolean {
         stop()
-        val wantedId = CameraProbe.findId(s.facing)
-        val id = wantedId ?: 0
-        val cam = RtspServerCamera1(context.applicationContext, this, s.rtspPort)
-        val client = cam.streamClient
-        client.setOnlyVideo(true) // no empty AAC track in the SDP
-        client.setLogs(false)
-        if (s.authEnabled) client.setAuthorization(s.username, s.password)
-        cam.setFpsListener { f ->
-            fps = f
-            lastFrameAtMs = SystemClock.elapsedRealtime()
-        }
+        var cam: RtspServerCamera1? = null
         try {
+            val wantedId = CameraProbe.findId(s.facing)
+            val id = wantedId ?: 0
+            cam = RtspServerCamera1(context.applicationContext, this, s.rtspPort)
+            val client = cam.streamClient
+            client.setOnlyVideo(true) // no empty AAC track in the SDP
+            client.setLogs(false)
+            if (s.authEnabled) client.setAuthorization(s.username, s.password)
+            cam.setFpsListener { f ->
+                fps = f
+                lastFrameAtMs = SystemClock.elapsedRealtime()
+            }
             if (!cam.prepareVideo(s.size.width, s.size.height, s.fps, s.bitrate, s.rotation)) {
                 return fail("encoder does not accept ${s.size} at ${s.fps} fps")
             }
@@ -59,21 +64,24 @@ class StreamEngine(private val context: Context) : ConnectChecker {
             // change the camera that opens, and the front camera opens. The ID overload works.
             cam.startPreview(id, s.size.width, s.size.height, s.fps, s.rotation)
             cam.startStream()
+
+            // The camera and encoder work now. Set the reported state before we publish camera.
+            val newFacing = CameraProbe.facingOf(id)
+            cameraId = id
+            facing = newFacing
+            fps = 0
+            lastFrameAtMs = SystemClock.elapsedRealtime()
+            lastError = if (wantedId == null) "no ${s.facing.wire} camera, using camera 0" else null
+            camera = cam
+            state = EngineState.STREAMING
+            if (s.torch) setTorch(true)
+            Log.i(TAG, "streaming camera $id (${newFacing.wire}) ${s.size}@${s.fps} on :${s.rtspPort}")
+            return true
         } catch (e: RuntimeException) {
             Log.e(TAG, "start failed", e)
-            try { cam.stopStream() } catch (_: RuntimeException) {}
+            try { cam?.stopStream() } catch (_: RuntimeException) {}
             return fail("camera start failed: ${e.message ?: e.javaClass.simpleName}")
         }
-        camera = cam
-        cameraId = id
-        facing = CameraProbe.facingOf(id)
-        fps = 0
-        lastFrameAtMs = SystemClock.elapsedRealtime()
-        lastError = if (wantedId == null) "no ${s.facing.wire} camera, using camera 0" else null
-        state = EngineState.STREAMING
-        if (s.torch) setTorch(true)
-        Log.i(TAG, "streaming camera $id (${facing.wire}) ${s.size}@${s.fps} on :${s.rtspPort}")
-        return true
     }
 
     fun stop() {
@@ -85,7 +93,7 @@ class StreamEngine(private val context: Context) : ConnectChecker {
         } catch (e: RuntimeException) {
             Log.w(TAG, "stop failed", e)
         }
-        synchronized(grabLock) { lastJpeg = null }
+        cache = null
         fps = 0
         if (state == EngineState.STREAMING) state = EngineState.STOPPED
     }
@@ -104,29 +112,35 @@ class StreamEngine(private val context: Context) : ConnectChecker {
     }
 
     /**
-     * A JPEG of the current frame, or null when no frame comes within [timeoutMs].
-     * Callers share one grab: a frame younger than [MIN_GRAB_INTERVAL_MS] is reused.
+     * A JPEG of the current frame, or null when no frame comes within [timeoutMs], or when no
+     * camera runs. Only one grab runs at a time. A frame younger than [MIN_GRAB_INTERVAL_MS]
+     * from the same camera is reused. [stop] never waits for a grab: it does not take the grab
+     * lock, so a slow or stuck grab cannot block the main thread.
      */
-    fun captureJpeg(quality: Int, timeoutMs: Long): ByteArray? = synchronized(grabLock) {
-        val now = SystemClock.elapsedRealtime()
-        val cached = lastJpeg
-        if (cached != null && now - lastJpegAtMs < MIN_GRAB_INTERVAL_MS) return cached
+    fun captureJpeg(quality: Int, timeoutMs: Long): ByteArray? {
         val cam = camera ?: return null
-        val latch = CountDownLatch(1)
-        var bitmap: Bitmap? = null
-        cam.glInterface.takePhoto { b ->
-            bitmap = b
-            latch.countDown()
+        val now = SystemClock.elapsedRealtime()
+        cache?.let { if (it.cam === cam && now - it.atMs < MIN_GRAB_INTERVAL_MS) return it.jpeg }
+        synchronized(grabLock) {
+            // Re-check: another thread may have grabbed while this one waited for the lock.
+            val nowLocked = SystemClock.elapsedRealtime()
+            cache?.let { if (it.cam === cam && nowLocked - it.atMs < MIN_GRAB_INTERVAL_MS) return it.jpeg }
+            if (camera !== cam) return null
+            val latch = CountDownLatch(1)
+            var bitmap: Bitmap? = null
+            cam.glInterface.takePhoto { b ->
+                bitmap = b
+                latch.countDown()
+            }
+            if (!latch.await(timeoutMs, TimeUnit.MILLISECONDS)) return null
+            val b = bitmap ?: return null
+            val out = ByteArrayOutputStream()
+            b.compress(Bitmap.CompressFormat.JPEG, quality, out)
+            b.recycle()
+            val jpeg = out.toByteArray()
+            if (camera === cam) cache = CachedJpeg(cam, jpeg, nowLocked)
+            return jpeg
         }
-        if (!latch.await(timeoutMs, TimeUnit.MILLISECONDS)) return null
-        val b = bitmap ?: return null
-        val out = ByteArrayOutputStream()
-        b.compress(Bitmap.CompressFormat.JPEG, quality, out)
-        b.recycle()
-        val jpeg = out.toByteArray()
-        lastJpeg = jpeg
-        lastJpegAtMs = now
-        jpeg
     }
 
     private fun fail(message: String): Boolean {
