@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ancamera</title>
+<style>
+  body { margin: 0; font: 15px/1.4 sans-serif; background: #111; color: #eee; }
+  main { max-width: 960px; margin: 0 auto; padding: 12px 16px 32px; }
+  h1 { font-size: 18px; margin: 4px 0 12px; }
+  #view { width: 100%; background: #000; display: block; min-height: 120px; }
+  #status { margin: 8px 0 16px; color: #aaa; font-size: 13px; }
+  #status.bad { color: #f88; }
+  form { display: grid; grid-template-columns: max-content 1fr; gap: 8px 12px; align-items: center; }
+  label { color: #bbb; }
+  input, select, button { font: inherit; padding: 6px 8px; background: #222; color: #eee; border: 1px solid #444; border-radius: 4px; }
+  input[type=checkbox] { justify-self: start; }
+  button { grid-column: 1 / 3; background: #2d5; color: #000; border: 0; font-weight: bold; cursor: pointer; }
+  #message { grid-column: 1 / 3; min-height: 1.4em; }
+  .auth { display: none; }
+  .links { font-size: 13px; color: #aaa; word-break: break-all; }
+</style>
+</head>
+<body>
+<main>
+  <h1>ancamera</h1>
+  <img id="view" src="/mjpeg?fps=5" alt="live view">
+  <div id="status">Loading…</div>
+  <form id="form">
+    <label for="camera">Camera</label><select id="camera"></select>
+    <label for="size">Resolution</label><select id="size"></select>
+    <label for="fps">FPS</label><input id="fps" type="number" min="1">
+    <label for="bitrate">Bitrate (bit/s)</label><input id="bitrate" type="number" step="100000">
+    <label for="rotation">Rotation</label><select id="rotation"></select>
+    <label for="torch">Torch</label><input id="torch" type="checkbox">
+    <label for="mjpegQuality">MJPEG quality</label><input id="mjpegQuality" type="number">
+    <label for="rtspPort">RTSP port</label><input id="rtspPort" type="number" min="1024" max="65535">
+    <label for="httpPort">HTTP port</label><input id="httpPort" type="number" min="1024" max="65535">
+    <label class="auth" for="username">Username</label><input class="auth" id="username" type="text" autocomplete="username">
+    <label class="auth" for="password">New password</label><input class="auth" id="password" type="password" autocomplete="new-password" placeholder="leave empty to keep">
+    <button type="submit">Save</button>
+    <div id="message"></div>
+  </form>
+  <p class="links" id="links"></p>
+</main>
+<script>
+(function () {
+  var current = null, allowed = null;
+  function $(id) { return document.getElementById(id); }
+
+  function request(method, url, body, done) {
+    var xhr = new XMLHttpRequest();
+    xhr.open(method, url, true);
+    if (body) xhr.setRequestHeader('Content-Type', 'application/json');
+    xhr.onreadystatechange = function () {
+      if (xhr.readyState !== 4) return;
+      var data = null;
+      try { data = JSON.parse(xhr.responseText); } catch (e) {}
+      done(xhr.status, data);
+    };
+    xhr.send(body ? JSON.stringify(body) : null);
+  }
+
+  function fillSelect(select, values, value) {
+    select.innerHTML = '';
+    for (var i = 0; i < values.length; i++) {
+      var o = document.createElement('option');
+      o.value = o.textContent = String(values[i]);
+      if (String(values[i]) === String(value)) o.selected = true;
+      select.appendChild(o);
+    }
+  }
+
+  function showSettings(data) {
+    current = data.settings; allowed = data.allowed;
+    fillSelect($('camera'), allowed.camera, current.camera);
+    fillSelect($('size'), allowed.size[current.camera] || [], current.size);
+    fillSelect($('rotation'), allowed.rotation, current.rotation);
+    $('fps').max = allowed.fps[1];
+    $('fps').value = current.fps;
+    $('bitrate').value = current.bitrate;
+    $('torch').checked = current.torch;
+    $('mjpegQuality').min = allowed.mjpegQuality[0];
+    $('mjpegQuality').max = allowed.mjpegQuality[1];
+    $('mjpegQuality').value = current.mjpegQuality;
+    $('rtspPort').value = current.rtspPort;
+    $('httpPort').value = current.httpPort;
+    $('username').value = current.username;
+    $('password').value = '';
+    var auth = document.querySelectorAll('.auth');
+    for (var i = 0; i < auth.length; i++) auth[i].style.display = current.passwordSet ? 'block' : 'none';
+  }
+
+  function loadSettings() {
+    request('GET', '/api/settings', null, function (code, data) {
+      if (code === 200 && data) showSettings(data);
+    });
+  }
+
+  function loadStatus() {
+    request('GET', '/api/status', null, function (code, s) {
+      var el = $('status');
+      if (code !== 200 || !s) { el.textContent = 'Phone not reachable'; el.className = 'bad'; return; }
+      var text = s.state + ' · camera ' + s.cameraId + ' (' + s.facing + ') · ' + s.size + ' · ' + s.fps + ' fps · ' +
+        s.rtspClients + ' RTSP / ' + s.mjpegClients + ' MJPEG viewers · battery ' + s.batteryPercent + '% ' +
+        s.batteryTempC.toFixed(1) + ' °C';
+      if (s.batteryHot) text += ' · BATTERY HOT';
+      if (s.lastError) text += ' · ' + s.lastError;
+      el.textContent = text;
+      el.className = (s.state === 'error' || s.batteryHot) ? 'bad' : '';
+      $('links').textContent = 'RTSP: ' + s.rtspUrl + '   MJPEG: ' + s.httpUrl + 'mjpeg   Snapshot: ' + s.httpUrl + 'snapshot.jpg';
+    });
+  }
+
+  $('camera').onchange = function () {
+    fillSelect($('size'), allowed.size[$('camera').value] || [], current.size);
+  };
+
+  $('form').onsubmit = function (e) {
+    e.preventDefault();
+    var patch = {}, numbers = ['fps', 'bitrate', 'mjpegQuality', 'rtspPort', 'httpPort', 'rotation'];
+    if ($('camera').value !== current.camera) patch.camera = $('camera').value;
+    if ($('size').value !== current.size) patch.size = $('size').value;
+    for (var i = 0; i < numbers.length; i++) {
+      var v = parseInt($(numbers[i]).value, 10);
+      if (v !== current[numbers[i]]) patch[numbers[i]] = v;
+    }
+    if ($('torch').checked !== current.torch) patch.torch = $('torch').checked;
+    if (current.passwordSet && $('password').value) {
+      patch.username = $('username').value;
+      patch.password = $('password').value;
+    }
+    request('POST', '/api/settings', patch, function (code, data) {
+      var msg = $('message');
+      if (code !== 200 || !data) {
+        msg.textContent = 'Not saved: ' + (data ? data.field + ' ' + data.error : 'error ' + code);
+        return;
+      }
+      showSettings(data);
+      if (data.apply === 'server_restart') {
+        msg.textContent = 'Saved. The server restarts. This page reloads in 4 s.';
+        setTimeout(function () {
+          location.href = location.protocol + '//' + location.hostname + ':' + data.settings.httpPort + '/';
+        }, 4000);
+      } else if (data.apply === 'stream_restart') {
+        msg.textContent = 'Saved. The stream restarts (1–2 s).';
+        setTimeout(function () { $('view').src = '/mjpeg?fps=5&t=' + new Date().getTime(); }, 2500);
+      } else {
+        msg.textContent = 'Saved.';
+      }
+    });
+  };
+
+  loadSettings();
+  loadStatus();
+  setInterval(loadStatus, 3000);
+})();
+</script>
+</body>
+</html>
