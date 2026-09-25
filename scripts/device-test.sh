@@ -12,7 +12,7 @@ PKG=com.ancamera
 H=http://127.0.0.1:18080
 R=rtsp://127.0.0.1:18554/
 TMP=$(mktemp -d)
-trap 'rm -rf "$TMP"; adb forward --remove tcp:18080 >/dev/null 2>&1; adb forward --remove tcp:18554 >/dev/null 2>&1' EXIT
+trap 'rm -rf "$TMP"; for p in 18080 18554 18555 18081; do adb forward --remove tcp:$p >/dev/null 2>&1; done' EXIT
 PASSED=0
 FAILED=0
 
@@ -30,6 +30,14 @@ wait_streaming() {
   for _ in $(seq 1 40); do
     st=$(status_field state "$@")
     [ "$st" = streaming ] && sleep 3 && return 0
+    sleep 1
+  done
+  return 1
+}
+# wait_http <base-url>: true when /api/status gives 200 within 10 s
+wait_http() {
+  for _ in $(seq 1 10); do
+    [ "$(curl -s -o /dev/null -w '%{http_code}' --max-time 2 "$1/api/status")" = 200 ] && return 0
     sleep 1
   done
   return 1
@@ -99,17 +107,39 @@ echo "== settings"
 curl -s --max-time 3 "$H/api/settings" > "$TMP/settings.json"
 OLD_SIZE=$(json "d['settings']['size']" < "$TMP/settings.json")
 NEW_SIZE=$(json "next((s for s in (['640x480'] + d['allowed']['size'][d['settings']['camera']]) if s != d['settings']['size'] and s in d['allowed']['size'][d['settings']['camera']]), '')" < "$TMP/settings.json")
-APPLY=$(curl -s --max-time 5 -X POST -d "{\"size\":\"$NEW_SIZE\"}" "$H/api/settings" | json "d['apply']")
+APPLY=$(curl -s --max-time 5 -X POST -H 'Content-Type: application/json' -d "{\"size\":\"$NEW_SIZE\"}" "$H/api/settings" | json "d['apply']")
 check "size change $OLD_SIZE -> $NEW_SIZE is a stream restart (got: $APPLY)" [ "$APPLY" = stream_restart ]
 sleep 2; wait_streaming
 STREAMS=$(probe "$R")
 check "RTSP now streams $NEW_SIZE (got: $STREAMS)" [ "$STREAMS" = "video:h264:${NEW_SIZE%x*}:${NEW_SIZE#*x}" ]
-BAD=$(curl -s -o /dev/null -w '%{http_code}' --max-time 3 -X POST -d '{"fps":999}' "$H/api/settings")
+BAD=$(curl -s -o /dev/null -w '%{http_code}' --max-time 3 -X POST -H 'Content-Type: application/json' -d '{"fps":999}' "$H/api/settings")
 check "fps 999 is rejected with 400 (got: $BAD)" [ "$BAD" = 400 ]
-FIRSTPW=$(curl -s -o /dev/null -w '%{http_code}' --max-time 3 -X POST -d '{"username":"a","password":"b"}' "$H/api/settings")
+FIRSTPW=$(curl -s -o /dev/null -w '%{http_code}' --max-time 3 -X POST -H 'Content-Type: application/json' -d '{"username":"a","password":"b"}' "$H/api/settings")
 check "web page cannot set the first password (got: $FIRSTPW)" [ "$FIRSTPW" = 400 ]
-curl -s --max-time 5 -X POST -d "{\"size\":\"$OLD_SIZE\"}" "$H/api/settings" >/dev/null
+curl -s --max-time 5 -X POST -H 'Content-Type: application/json' -d "{\"size\":\"$OLD_SIZE\"}" "$H/api/settings" >/dev/null
 sleep 2; wait_streaming
+
+echo "== server restart"
+APPLY=$(curl -s --max-time 5 -X POST -H 'Content-Type: application/json' -d '{"rtspPort":8555}' "$H/api/settings" | json "d['apply']")
+check "rtspPort 8555 is a server restart (got: $APPLY)" [ "$APPLY" = server_restart ]
+adb forward tcp:18555 tcp:8555 >/dev/null
+sleep 2
+check "service streams again after the RTSP port change" wait_streaming
+check "RTSP on port 8555 gives the H.264 stream" \
+  [ "$(probe rtsp://127.0.0.1:18555/ | cut -d: -f1,2)" = "video:h264" ]
+curl -s --max-time 5 -X POST -H 'Content-Type: application/json' -d '{"rtspPort":8554}' "$H/api/settings" >/dev/null
+sleep 2
+check "service streams again on RTSP port 8554" wait_streaming
+adb forward --remove tcp:18555 >/dev/null 2>&1
+
+APPLY=$(curl -s --max-time 5 -X POST -H 'Content-Type: application/json' -d '{"httpPort":8081}' "$H/api/settings" | json "d['apply']")
+check "httpPort 8081 is a server restart (got: $APPLY)" [ "$APPLY" = server_restart ]
+adb forward tcp:18081 tcp:8081 >/dev/null
+check "status on HTTP port 8081 is 200 within 10 s" wait_http http://127.0.0.1:18081
+curl -s --max-time 5 -X POST -H 'Content-Type: application/json' -d '{"httpPort":8080}' http://127.0.0.1:18081/api/settings >/dev/null
+check "status on HTTP port 8080 is 200 within 10 s" wait_http "$H"
+adb forward --remove tcp:18081 >/dev/null 2>&1
+wait_streaming
 
 echo "== auth"
 adbcmd --es username testuser --es password testpass
