@@ -130,8 +130,8 @@ The web page cannot set a password when no password is set. Only `MainActivity` 
 | Failure | Behaviour |
 |---|---|
 | Camera open fails | Status `error`. Retry after 2 s, 5 s, 10 s, 30 s, then every 60 s. The notification and `/api/status` show the last error. |
-| Encoder crash | The library restarts the encoder. After 3 crashes in 60 s, do a full engine restart. |
-| No frames for 10 s while streaming | Watchdog does a full engine restart. |
+| Encoder crash | The library restarts the encoder. If frames stop, the watchdog below does a full engine restart. The app does not use the library `CodecErrorCallback`: its signature uses `MediaCodec.CodecException`, which exists only from API 21. |
+| No frames for 10 s while streaming | Watchdog does a full engine restart. The frame signal is the library fps callback, which fires once for each encoded frame. |
 | Saved settings not valid at start | Use the defaults and log the problem. |
 | Chosen camera missing | Use camera ID 0 and report this in the status. |
 | Port in use | Report in the notification and the status. Do not crash. |
