@@ -133,7 +133,7 @@
     request('POST', '/api/settings', patch, function (code, data) {
       var msg = $('message');
       if (code !== 200 || !data) {
-        msg.textContent = 'Not saved: ' + (data ? data.field + ' ' + data.error : 'error ' + code);
+        msg.textContent = 'Not saved: ' + (data ? (data.field ? data.field + ' ' + data.error : data.error) : 'error ' + code);
         return;
       }
       showSettings(data);

@@ -36,7 +36,14 @@ object SettingsRules {
                 "mjpegQuality" -> s.copy(mjpegQuality = intOf(value) ?: return PatchResult.Invalid(key, "must be a number"))
                 "rtspPort" -> s.copy(rtspPort = intOf(value) ?: return PatchResult.Invalid(key, "must be a number"))
                 "httpPort" -> s.copy(httpPort = intOf(value) ?: return PatchResult.Invalid(key, "must be a number"))
-                "username" -> s.copy(username = value as? String ?: return PatchResult.Invalid(key, "must be text"))
+                "username" -> {
+                    val name = value as? String ?: return PatchResult.Invalid(key, "must be text")
+                    // Basic auth splits user:pass at the first ':'. Control characters break headers.
+                    if (name.any { it == ':' || it.isISOControl() }) {
+                        return PatchResult.Invalid(key, "must not contain ':' or control characters")
+                    }
+                    s.copy(username = name)
+                }
                 "password" -> s.copy(password = value as? String ?: return PatchResult.Invalid(key, "must be text"))
                 else -> return PatchResult.Invalid(key, "unknown setting")
             }

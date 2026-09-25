@@ -39,8 +39,10 @@ class HttpResponse(
             200 -> "OK"
             400 -> "Bad Request"
             401 -> "Unauthorized"
+            403 -> "Forbidden"
             404 -> "Not Found"
             405 -> "Method Not Allowed"
+            415 -> "Unsupported Media Type"
             503 -> "Service Unavailable"
             else -> "Internal Server Error"
         }

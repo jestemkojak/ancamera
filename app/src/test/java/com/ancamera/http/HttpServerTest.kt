@@ -50,7 +50,7 @@ class HttpServerTest {
     }
 
     @Test fun servesStatus() {
-        val text = exchange("GET /api/status HTTP/1.1\r\nHost: x\r\n\r\n")
+        val text = exchange("GET /api/status HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n")
         assertTrue(text, text.startsWith("HTTP/1.0 200 OK"))
         assertTrue(text.endsWith("""{"state":"streaming"}"""))
     }
@@ -112,6 +112,33 @@ class HttpServerTest {
             assertEquals(0, s2.mjpegClients)
         } finally {
             client.close()
+            s2.stop()
+        }
+    }
+
+    @Test fun slowHeadersAreClosedAtTheDeadline() {
+        val p = ServerSocket(0).use { it.localPort }
+        val s2 = HttpServer(p, Router(backend, ByteArray(0)), backend, headerDeadlineMs = 500)
+        s2.start()
+        try {
+            Socket("127.0.0.1", p).use { client ->
+                client.soTimeout = 5000
+                client.getOutputStream().write("GET /api/sta".toByteArray())
+                client.getOutputStream().flush()
+                val started = System.currentTimeMillis()
+                // Read returns -1 (or throws a reset) when the server closes the socket.
+                val n = try {
+                    client.getInputStream().read()
+                } catch (_: java.net.SocketTimeoutException) {
+                    -2 // the server did not close the socket
+                } catch (_: java.io.IOException) {
+                    -1
+                }
+                val took = System.currentTimeMillis() - started
+                assertEquals(-1, n)
+                assertTrue("closed after $took ms", took < 2000)
+            }
+        } finally {
             s2.stop()
         }
     }

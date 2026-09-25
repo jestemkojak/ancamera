@@ -133,6 +133,18 @@ class SettingsRulesTest {
         assertEquals(false, cleared.settings.authEnabled)
     }
 
+    @Test fun usernameMustNotHaveColonOrControlCharacters() {
+        val withAuth = base.copy(username = "u", password = "p")
+        for (name in listOf("a:b", "a\nb", "a\u0000b", "a\tb", "a\u007Fb")) {
+            val r = SettingsRules.applyPatch(withAuth, mapOf("username" to name), caps, fromWeb = true)
+            assertTrue(name, r is PatchResult.Invalid)
+            r as PatchResult.Invalid
+            assertEquals("username", r.field)
+            assertEquals("must not contain ':' or control characters", r.reason)
+        }
+        assertEquals("a b.c", ok(mapOf("username" to "a b.c"), current = withAuth).settings.username)
+    }
+
     @Test fun sanitizeFixesBadSavedValues() {
         val bad = Settings(
             facing = Facing.FRONT, size = Size(1920, 1080), fps = 99, bitrate = 1, rotation = 7,

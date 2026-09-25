@@ -15,6 +15,7 @@ class HttpServer(
     private val router: Router,
     private val backend: HttpBackend,
     private val writeTimeoutMs: Long = WRITE_TIMEOUT_MS,
+    private val headerDeadlineMs: Long = HEADER_DEADLINE_MS,
 ) {
     private val active = AtomicInteger(0)
     private val mjpeg = AtomicInteger(0)
@@ -60,6 +61,12 @@ class HttpServer(
     private fun acceptLoop(ss: ServerSocket) {
         while (running) {
             val socket = try { ss.accept() } catch (e: IOException) { break }
+            // Serve only LAN clients. Close other sockets at once, with no response.
+            val remote = socket.inetAddress
+            if (remote == null || !isLocalAddress(remote)) {
+                try { socket.close() } catch (_: IOException) {}
+                continue
+            }
             if (active.incrementAndGet() > MAX_CONNECTIONS) {
                 active.decrementAndGet()
                 try {
@@ -86,11 +93,17 @@ class HttpServer(
     private fun handle(socket: Socket) {
         try {
             socket.soTimeout = READ_TIMEOUT_MS
+            // The read timeout applies to each read. This deadline limits the full request, so a
+            // client that sends one byte at a time cannot hold a connection slot.
+            val deadline = writeGuard.schedule({ try { socket.close() } catch (_: IOException) {} }, headerDeadlineMs, TimeUnit.MILLISECONDS)
             val req = try {
                 HttpRequest.parse(socket.getInputStream()) ?: return
             } catch (e: BadRequestException) {
+                deadline.cancel(false)
                 guarded(socket) { HttpResponse.text(400, e.message ?: "bad request").writeTo(socket.getOutputStream()) }
                 return
+            } finally {
+                deadline.cancel(false)
             }
             when (val routed = router.route(req)) {
                 is Routed.Response -> guarded(socket) { routed.response.writeTo(socket.getOutputStream()) }
@@ -127,5 +140,6 @@ class HttpServer(
         const val READ_TIMEOUT_MS = 10_000
         const val WRITE_TIMEOUT_MS = 15_000L
         const val FRAME_TIMEOUT_MS = 2_000L
+        const val HEADER_DEADLINE_MS = 10_000L
     }
 }
