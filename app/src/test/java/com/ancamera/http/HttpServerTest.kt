@@ -7,6 +7,7 @@ import org.junit.Before
 import org.junit.Test
 import java.io.ByteArrayOutputStream
 import java.io.InputStream
+import java.net.InetSocketAddress
 import java.net.ServerSocket
 import java.net.Socket
 
@@ -87,5 +88,31 @@ class HttpServerTest {
 
     @Test(expected = java.io.IOException::class) fun portInUseThrows() {
         HttpServer(port, Router(backend, ByteArray(0)), backend).start()
+    }
+
+    @Test fun stalledMjpegClientIsDropped() {
+        val big = FakeBackend(frame = ByteArray(1 shl 20))
+        val p = ServerSocket(0).use { it.localPort }
+        val s2 = HttpServer(p, Router(big, ByteArray(0)), big, writeTimeoutMs = 500)
+        s2.start()
+        val client = Socket()
+        try {
+            client.receiveBufferSize = 4096
+            client.connect(InetSocketAddress("127.0.0.1", p))
+            client.getOutputStream().write("GET /mjpeg?fps=15 HTTP/1.1\r\n\r\n".toByteArray())
+            // The client never reads, so the server's send buffer fills and its write blocks.
+            var seen = false
+            val deadline = System.currentTimeMillis() + 15_000
+            while (System.currentTimeMillis() < deadline) {
+                if (s2.mjpegClients == 1) seen = true
+                if (seen && s2.mjpegClients == 0) break
+                Thread.sleep(50)
+            }
+            assertTrue("stream never started", seen)
+            assertEquals(0, s2.mjpegClients)
+        } finally {
+            client.close()
+            s2.stop()
+        }
     }
 }
