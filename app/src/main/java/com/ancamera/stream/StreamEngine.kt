@@ -7,7 +7,6 @@ import android.util.Log
 import com.ancamera.settings.Facing
 import com.ancamera.settings.Settings
 import com.pedro.common.ConnectChecker
-import com.pedro.rtspserver.RtspServerCamera1
 import java.io.ByteArrayOutputStream
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -32,9 +31,9 @@ class StreamEngine(private val context: Context) : ConnectChecker {
     /** True when the RTSP server could not bind its port. The server binds after [start] returns. */
     @Volatile var rtspFailed = false; private set
 
-    @Volatile private var camera: RtspServerCamera1? = null
+    @Volatile private var camera: TrimmedRtspServerCamera1? = null
     private val grabLock = Any()
-    private class CachedJpeg(val cam: RtspServerCamera1, val jpeg: ByteArray, val atMs: Long)
+    private class CachedJpeg(val cam: TrimmedRtspServerCamera1, val jpeg: ByteArray, val atMs: Long)
     @Volatile private var cache: CachedJpeg? = null
 
     val rtspClients: Int get() = camera?.streamClient?.getNumClients() ?: 0
@@ -47,11 +46,11 @@ class StreamEngine(private val context: Context) : ConnectChecker {
     fun start(s: Settings): Boolean {
         stop()
         rtspFailed = false
-        var cam: RtspServerCamera1? = null
+        var cam: TrimmedRtspServerCamera1? = null
         try {
             val wantedId = CameraProbe.findId(s.facing)
             val id = wantedId ?: 0
-            cam = RtspServerCamera1(context.applicationContext, this, s.rtspPort)
+            cam = TrimmedRtspServerCamera1(context.applicationContext, this, s.rtspPort)
             val client = cam.streamClient
             client.setOnlyVideo(true) // no empty AAC track in the SDP
             client.setLogs(false)
