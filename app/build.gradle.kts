@@ -14,9 +14,25 @@ android {
         versionName = "0.1.0"
         multiDexEnabled = true
     }
+    // The release key comes from the environment (see .github/workflows/release.yml).
+    // Without ANCAMERA_KEYSTORE, assembleRelease gives an unsigned APK.
+    val releaseKeystore = System.getenv("ANCAMERA_KEYSTORE")
+    signingConfigs {
+        if (releaseKeystore != null) {
+            create("release") {
+                storeFile = file(releaseKeystore)
+                storePassword = System.getenv("ANCAMERA_KEYSTORE_PASSWORD")
+                keyAlias = System.getenv("ANCAMERA_KEY_ALIAS")
+                keyPassword = System.getenv("ANCAMERA_KEY_PASSWORD")
+            }
+        }
+    }
     buildTypes {
         release {
             isMinifyEnabled = false
+            if (releaseKeystore != null) {
+                signingConfig = signingConfigs.getByName("release")
+            }
         }
     }
     compileOptions {
