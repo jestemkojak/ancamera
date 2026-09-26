@@ -49,6 +49,7 @@ scripts/soak.sh <adb-serial> 30 <phone-wifi-ip>   # 30 minutes with the screen o
 ```
 
 For the real soak test, give the phone's Wi-Fi IP. Without it, `soak.sh` reads the streams through adb port forwarding, and the test does not use Wi-Fi.
+`soak.sh` writes the ffmpeg errors and progress, the app status once a minute, and the phone log to a new directory, and shows its path.
 
 Do not use an API 19 emulator for video tests: its H.264 encoder does not work.
 Design: `docs/superpowers/specs/2026-09-25-ancamera-design.md`.
