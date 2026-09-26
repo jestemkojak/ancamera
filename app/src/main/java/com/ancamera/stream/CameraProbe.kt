@@ -3,6 +3,7 @@ package com.ancamera.stream
 import android.hardware.Camera
 import android.util.Log
 import com.ancamera.settings.Capabilities
+import com.ancamera.settings.ExposureRange
 import com.ancamera.settings.Facing
 import com.ancamera.settings.Size
 
@@ -31,11 +32,15 @@ object CameraProbe {
     }
 
     /**
-     * Opens each camera for a short time to read preview sizes and the fps range.
+     * Opens each camera for a short time to read preview sizes, the fps range, scene modes,
+     * ISO values and the exposure compensation range.
      * Call only while the stream does not use the camera.
      */
     fun capabilities(): Capabilities {
         val sizes = LinkedHashMap<Facing, List<Size>>()
+        val sceneModes = LinkedHashMap<Facing, List<String>>()
+        val isoValues = LinkedHashMap<Facing, List<String>>()
+        val exposure = LinkedHashMap<Facing, ExposureRange>()
         var maxFps = 30
         for (facing in Facing.values()) {
             val id = findId(facing) ?: continue
@@ -50,12 +55,22 @@ object CameraProbe {
                     .sortedByDescending { it.area }
                 val top = params.supportedPreviewFpsRange?.maxOfOrNull { it[Camera.Parameters.PREVIEW_FPS_MAX_INDEX] }
                 if (top != null && top >= 1000) maxFps = minOf(maxFps, top / 1000)
+                sceneModes[facing] = params.supportedSceneModes.orEmpty()
+                // Qualcomm key. Not in the public API, so it can be missing.
+                isoValues[facing] = params.get("iso-values").orEmpty()
+                    .split(',').map { it.trim() }.filter { it.isNotEmpty() }
+                exposure[facing] = ExposureRange(
+                    params.minExposureCompensation,
+                    params.maxExposureCompensation,
+                    params.exposureCompensationStep,
+                )
+                Log.i(TAG, "camera $id: scene modes ${sceneModes[facing]}, iso ${isoValues[facing]}, exposure ${exposure[facing]}")
             } catch (e: RuntimeException) {
                 Log.w(TAG, "cannot read camera $id", e)
             } finally {
                 camera?.release()
             }
         }
-        return Capabilities(sizes, maxFps)
+        return Capabilities(sizes, maxFps, sceneModes, isoValues, exposure)
     }
 }

@@ -18,8 +18,9 @@ enum class EngineState(val wire: String) {
 }
 
 /**
- * The only class that uses RootEncoder / RTSP-Server. Call [start], [stop], [setBitrate] and
- * [setTorch] on the main thread. [captureJpeg] and the status fields are safe from any thread.
+ * The only class that uses RootEncoder / RTSP-Server. Call [start], [stop], [setBitrate],
+ * [setTorch] and [setExposureSettings] on the main thread. [captureJpeg] and the status fields
+ * are safe from any thread.
  */
 class StreamEngine(private val context: Context) : ConnectChecker {
     @Volatile var state: EngineState = EngineState.STOPPED; private set
@@ -76,6 +77,8 @@ class StreamEngine(private val context: Context) : ConnectChecker {
             lastError = if (wantedId == null) "no ${s.facing.wire} camera, using camera 0" else null
             camera = cam
             state = EngineState.STREAMING
+            // Before the torch: a scene mode can change the flash mode.
+            setExposureSettings(s)
             if (s.torch) setTorch(true)
             Log.i(TAG, "streaming camera $id (${newFacing.wire}) ${s.size}@${s.fps} on :${s.rtspPort}")
             return true
@@ -118,6 +121,24 @@ class StreamEngine(private val context: Context) : ConnectChecker {
             if (on) cam.enableLantern() else cam.disableLantern()
         } catch (e: Exception) {
             lastError = "torch not available: ${e.message}"
+        }
+    }
+
+    /**
+     * Sets the scene mode, ISO and exposure compensation of [s] on the running camera, in this
+     * order, because a scene mode can reset the other two. A failure sets [lastError] and does
+     * not stop the stream.
+     */
+    fun setExposureSettings(s: Settings) {
+        val cam = camera ?: return
+        try {
+            cam.setSceneModeAndIso(s.sceneMode, s.iso)
+            if (cam.exposure != s.exposureCompensation) cam.setExposure(s.exposureCompensation)
+        } catch (e: Exception) {
+            // RuntimeException from the camera, or a reflection exception.
+            Log.w(TAG, "exposure settings failed", e)
+            lastError = "cannot set scene mode ${s.sceneMode}, iso ${s.iso}, exposure compensation " +
+                "${s.exposureCompensation}: ${e.message ?: e.javaClass.simpleName}"
         }
     }
 

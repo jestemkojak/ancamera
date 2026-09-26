@@ -200,7 +200,9 @@ class CameraService : Service(), HttpBackend {
             ApplyKind.NONE -> {}
             ApplyKind.LIVE -> {
                 if (old.bitrate != new.bitrate) engine.setBitrate(new.bitrate)
-                if (old.torch != new.torch) engine.setTorch(new.torch)
+                if (SettingsRules.exposureChanged(old, new)) engine.setExposureSettings(new)
+                // A new scene mode can change the flash mode, so set the torch again after it.
+                if (old.torch != new.torch || (new.torch && old.sceneMode != new.sceneMode)) engine.setTorch(new.torch)
             }
             ApplyKind.STREAM_RESTART -> startEngine()
             ApplyKind.SERVER_RESTART -> {

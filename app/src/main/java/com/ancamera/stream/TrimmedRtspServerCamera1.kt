@@ -1,6 +1,7 @@
 package com.ancamera.stream
 
 import android.content.Context
+import android.hardware.Camera
 import android.media.MediaCodec
 import android.os.Build
 import android.util.Log
@@ -8,6 +9,7 @@ import androidx.annotation.RequiresApi
 import com.pedro.common.AudioCodec
 import com.pedro.common.ConnectChecker
 import com.pedro.common.VideoCodec
+import com.pedro.encoder.input.video.Camera1ApiManager
 import com.pedro.library.base.Camera1Base
 import com.pedro.rtspserver.server.RtspServer
 import com.pedro.rtspserver.util.RtspServerStreamClient
@@ -86,6 +88,29 @@ class TrimmedRtspServerCamera1 : Camera1Base {
         rtspServer.sendVideo(trimmed, trimmedInfo)
     }
 
+    /**
+     * Sets the scene mode and ISO of the open camera. The library has no API for them, so this
+     * gets the `android.hardware.Camera` by reflection: private field `cameraManager` of
+     * [Camera1Base], then private field `camera` of [Camera1ApiManager]. The names are from
+     * RootEncoder 2.8.1. Does nothing when the camera is not open. Sets the scene mode first,
+     * because a scene mode can change the ISO. A key that the camera does not have counts as
+     * "auto", so "auto" on such a camera does nothing. Throws RuntimeException or a reflection
+     * exception on failure.
+     */
+    @Suppress("DEPRECATION")
+    fun setSceneModeAndIso(sceneMode: String, iso: String) {
+        val managerField = Camera1Base::class.java.getDeclaredField("cameraManager").apply { isAccessible = true }
+        val manager = managerField.get(this) ?: return
+        val cameraField = Camera1ApiManager::class.java.getDeclaredField("camera").apply { isAccessible = true }
+        val camera = cameraField.get(manager) as? Camera ?: return
+        for ((key, value) in listOf("scene-mode" to sceneMode, "iso" to iso)) {
+            val p = camera.parameters
+            if ((p.get(key) ?: AUTO) == value) continue
+            p.set(key, value)
+            camera.parameters = p
+        }
+    }
+
     override fun getStreamClient(): RtspServerStreamClient = RtspServerStreamClient(rtspServer)
 
     override fun setVideoCodecImp(codec: VideoCodec) {
@@ -98,5 +123,6 @@ class TrimmedRtspServerCamera1 : Camera1Base {
 
     companion object {
         private const val TAG = "TrimmedRtspCamera"
+        private const val AUTO = "auto"
     }
 }
