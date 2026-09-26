@@ -38,6 +38,9 @@ A throwaway probe gave these facts. The probe code was not kept.
 - The RTSP server supports Basic auth only.
 - The H.264 encoder of the API 19 emulator does not work, even with plain `MediaCodec`. Do not use the API 19 emulator for video tests.
 - In dim light the camera gives 9–11 fps, because of long exposure times. This is not a library limit.
+- The G3 back camera has only the preview fps ranges (1,30) and (10,30) fps. The library selects (10,30), so auto exposure can lower the frame rate to 10 fps. A fixed fps range is not possible.
+- G3 exposure controls (2026-09-26): 20 scene modes (`sports`, `action`, `night`, …), ISO `auto`, `ISO_HJR`, `ISO100`–`ISO1600` (Qualcomm keys `iso` and `iso-values`), exposure compensation −12..12 in steps of 1/6 EV. `ISO800` makes the exposure about 4 times shorter. `sports` and `action` do not change the exposure.
+- **Library bug (API < 21):** MediaCodec does not set `position` and `limit` of the buffers from `getOutputBuffers()`. So `limit()` is the full buffer capacity (1–2 MB), not the frame size. The RTSP sender copies `[0, limit())` into its 400-frame queue for each frame. A short Wi-Fi delay then fills the 128 MB heap, and the encoder thread stops with `OutOfMemoryError`. Workaround: `TrimmedRtspServerCamera1` trims each frame to `[offset, offset + size)` before the RTSP server gets it. A frame with a range outside the buffer is dropped.
 - G3 encoder limits: H.264 up to 3840×2160, 40 Mbit/s, 120 fps.
 
 ## 4. Architecture
@@ -46,7 +49,7 @@ A throwaway probe gave these facts. The probe code was not kept.
 MainActivity ──start/stop──▶ CameraService (foreground service, type=camera)
                                  │  holds PARTIAL wake lock + Wi-Fi lock
                                  ▼
-                      StreamEngine ───────────────▶ RtspServerCamera1(Context)  :8554
+                      StreamEngine ───────────────▶ TrimmedRtspServerCamera1(Context)  :8554
                       (the only class that         (background mode: GL + encoder surface)
                        uses the libraries)              │
                                  │ JPEG frames when requested (GL frame capture)
@@ -69,12 +72,13 @@ MainActivity ──start/stop──▶ CameraService (foreground service, type=c
 | Unit | Job | Depends on |
 |---|---|---|
 | `Settings` | Typed, validated settings. Persisted in SharedPreferences. The validation logic has no Android dependencies. | nothing |
-| `StreamEngine` | Starts, stops and reconfigures the RTSP stream. Applies the camera-ID workaround, `setOnlyVideo(true)` and auth. Gives JPEG frames on request. Reports status. | RootEncoder, RTSP-Server |
+| `StreamEngine` | Starts, stops and reconfigures the RTSP stream. Applies the camera-ID workaround, `setOnlyVideo(true)`, auth and the exposure settings. Gives JPEG frames on request. Reports status. | RootEncoder, RTSP-Server |
+| `TrimmedRtspServerCamera1` | App copy of the final library class `RtspServerCamera1`, background constructor only. Trims each video frame before the RTSP server gets it (API < 21 bug). Sets scene mode and ISO on the `android.hardware.Camera`, which it gets by reflection from private RootEncoder 2.8.1 fields. | RootEncoder, RTSP-Server |
 | `HttpServer` | HTTP server on `ServerSocket`, one thread for each connection, maximum 8 connections. Serves the page, MJPEG, snapshot and JSON API. Checks Basic auth. | `StreamEngine` and `Settings`, through interfaces |
 | `CameraService` | Foreground service of type `camera`, with a notification. Holds a partial wake lock and a Wi-Fi lock. Owns the engine and the HTTP server. Applies settings changes. `START_STICKY`. | all units above |
 | `MainActivity` | Start/stop button. Shows the RTSP and HTTP URLs with the phone IP. Asks for runtime permissions. Sets the first password. | `CameraService` |
 
-`StreamEngine` is the only unit that imports library classes. All library workarounds are in this unit.
+`StreamEngine` and `TrimmedRtspServerCamera1` are the only units that import library classes. All library workarounds are in these units.
 
 ### 4.3 How the two streams share the camera
 
@@ -104,7 +108,7 @@ Before auth, the server does these checks against DNS rebinding and cross-site r
 | `GET /mjpeg` | `multipart/x-mixed-replace` MJPEG. Optional `?fps=` (default 5, maximum 15). |
 | `GET /snapshot.jpg` | One current JPEG. |
 | `GET /api/status` | JSON: streaming state, camera ID and facing, size, fps sent, RTSP client count, MJPEG client count, battery level and temperature, uptime, last error. |
-| `GET /api/settings` | JSON: current settings and allowed values (supported sizes for each camera, camera list). |
+| `GET /api/settings` | JSON: current settings and allowed values (camera list, and for each camera: supported sizes, scene modes, ISO values and the exposure compensation range). |
 | `POST /api/settings` | Partial JSON update. Validate, save, apply. Returns the new settings, or `400` with the name of the bad field. |
 
 ### 5.1 Settings
@@ -117,10 +121,17 @@ Before auth, the server does these checks against DNS rebinding and cross-site r
 | bitrate | 2.5 Mbit/s | live |
 | rotation (0/90/180/270) | 0 | stream restart |
 | torch | off | live |
+| exposureCompensation (index, one index = step EV) | 0 | live |
+| sceneMode | auto | live |
+| iso | auto | live |
 | MJPEG quality | 70 | live |
 | RTSP port | 8554 | server restart |
 | HTTP port | 8080 | server restart |
 | username / password | none | server restart |
+
+`CameraProbe` reads the allowed values of each camera at service start. Scene modes and exposure compensation use the standard `Camera.Parameters` API. ISO uses the Qualcomm keys `iso` and `iso-values`. A camera without a list accepts only the default. A value that the new camera does not support goes back to the default when the camera changes. The app sets scene mode, then ISO, then exposure compensation, after each engine start and on each change. A failed camera call sets the last error, and the stream continues.
+
+In low light, a fixed `iso` or a negative `exposureCompensation` makes the exposure shorter, so the frame rate stays higher. The picture is then noisier or darker.
 
 A stream restart takes about 1–2 s. RTSP clients disconnect and reconnect by themselves. After a server restart, the page shows a warning and reloads.
 
@@ -158,10 +169,11 @@ The web page cannot set a password when no password is set. Only `MainActivity` 
    - A changed RTSP port and a changed HTTP port work, and the old ports work again after the change back.
    - With auth on: `401` without credentials, `200` with credentials, RTSP works with credentials.
 3. Test targets: LG G3 (API 19) and the API 34 emulator. Do not use the API 19 emulator.
-4. Screen-off soak on the G3: 30 minutes with the screen off. Record the frame count and the battery temperature.
+4. Screen-off soak on the G3 (`scripts/soak.sh <serial> 30 <phone-wifi-ip>`): 30 minutes with the screen off. Record the frame count and the battery temperature. The script writes the ffmpeg log, the app status once a minute and the phone log to a new directory.
 
 ## 8. Risks
 
 - Upstream does not test API 19 (its sample app uses `minSdk 23`). Keep the versions pinned. Run the device test on the G3 before each library update.
 - Old camera HALs can stall silently. The watchdog covers this.
+- Scene mode and ISO use reflection on private RootEncoder 2.8.1 fields (`Camera1Base.cameraManager`, `Camera1ApiManager.camera`). A library update can break them. The library version is pinned for this reason. A failure only sets the last error.
 - A phone that runs all day on a charger can get hot, and its battery can swell. The status shows the battery temperature. Monitor it during the first days of use.

@@ -15,7 +15,7 @@ Turn an old Android phone (Android 4.4+) into a LAN monitoring camera.
 3. Push **Start**. The stream continues when the screen is off. Keep the phone on a charger.
 4. Open the web page to change the camera, resolution, fps, bitrate, rotation, torch, scene mode, ISO or exposure compensation.
 
-In low light the camera lowers the frame rate. `sceneMode` `sports` or `action`, a fixed `iso`, or a negative `exposureCompensation` can keep it higher, with a darker or noisier picture.
+In low light the camera lowers the frame rate. A fixed `iso` (for example `ISO800`) or a negative `exposureCompensation` keeps it higher, with a noisier or darker picture. The effect of a `sceneMode` such as `sports` depends on the phone. On the LG G3 it does not change the exposure. The web page shows only the values that the camera supports.
 
 The first password can be set only on the phone. After that, the web page can change it.
 
