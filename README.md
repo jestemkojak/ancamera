@@ -19,6 +19,20 @@ The first password can be set only on the phone. After that, the web page can ch
 
 The web server accepts only LAN clients, but the RTSP server does not filter addresses, so keep the phone on a private network.
 
+### Low-latency viewing
+
+VLC keeps 1 s of network cache by default, so its picture is late. For less lag, use ffplay:
+
+```bash
+ffplay -fflags nobuffer -flags low_delay -framedrop -rtsp_transport tcp rtsp://<phone-ip>:8554/
+```
+
+In VLC, set a smaller cache:
+
+```bash
+vlc --network-caching=150 rtsp://<phone-ip>:8554/
+```
+
 ## Build
 
 Needs the Android SDK with platform 37 and JDK 21.
