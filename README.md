@@ -10,6 +10,11 @@ Turn an old Android phone (Android 4.4+) into a LAN monitoring camera.
 
 Tested only on an LG G3. Other phones can behave differently.
 
+<p>
+  <img src="docs/screenshots/app.png" alt="The app on the phone: stream URLs, Stop button and login fields" height="480">
+  <img src="docs/screenshots/web.png" alt="The web page: live view and camera settings" height="480">
+</p>
+
 ## Use
 
 1. Build the APK (see [Build](#build)), install it and open **ancamera**. There is no APK to download.
