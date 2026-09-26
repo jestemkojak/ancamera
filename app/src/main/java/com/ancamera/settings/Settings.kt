@@ -38,14 +38,29 @@ data class Settings(
     val httpPort: Int = 8080,
     val username: String = "",
     val password: String = "",
+    val exposureCompensation: Int = 0,
+    val sceneMode: String = "auto",
+    val iso: String = "auto",
 ) {
     val authEnabled: Boolean get() = username.isNotEmpty() && password.isNotEmpty()
 }
 
-/** What the phone supports. Filled from the camera when the service starts. */
+/**
+ * Exposure compensation range of one camera, as in `Camera.Parameters`. [min] and [max] are
+ * indexes. One index is [step] EV. min == max == 0 means the camera has no exposure compensation.
+ */
+data class ExposureRange(val min: Int = 0, val max: Int = 0, val step: Float = 0f)
+
+/**
+ * What the phone supports. Filled from the camera when the service starts. A camera with no
+ * entry in [sceneModes], [isoValues] or [exposure] accepts only the default of that setting.
+ */
 data class Capabilities(
     val sizes: Map<Facing, List<Size>>,
     val maxFps: Int = 30,
+    val sceneModes: Map<Facing, List<String>> = emptyMap(),
+    val isoValues: Map<Facing, List<String>> = emptyMap(),
+    val exposure: Map<Facing, ExposureRange> = emptyMap(),
 ) {
     val facings: List<Facing> get() = Facing.values().filter { !sizes[it].isNullOrEmpty() }
 }

@@ -18,9 +18,23 @@ object SettingsJson {
             .put("httpPort", s.httpPort)
             .put("username", s.username)
             .put("passwordSet", s.authEnabled)
+            .put("exposureCompensation", s.exposureCompensation)
+            .put("sceneMode", s.sceneMode)
+            .put("iso", s.iso)
         val sizes = JSONObject()
+        val sceneModes = JSONObject()
+        val isoValues = JSONObject()
+        val exposure = JSONObject()
         for (facing in caps.facings) {
             sizes.put(facing.wire, JSONArray(caps.sizes[facing].orEmpty().map { it.toString() }))
+            sceneModes.put(facing.wire, JSONArray(SettingsRules.sceneModes(caps, facing)))
+            isoValues.put(facing.wire, JSONArray(SettingsRules.isoValues(caps, facing)))
+            val range = SettingsRules.exposureRange(caps, facing)
+            // Float to text first, so 0.16666667f becomes 0.16666667 and not 0.1666666716337204.
+            exposure.put(facing.wire, JSONObject()
+                .put("min", range.min)
+                .put("max", range.max)
+                .put("step", range.step.toString().toDouble()))
         }
         val allowed = JSONObject()
             .put("camera", JSONArray(caps.facings.map { it.wire }))
@@ -29,6 +43,9 @@ object SettingsJson {
             .put("bitrate", JSONArray(listOf(SettingsRules.MIN_BITRATE, SettingsRules.MAX_BITRATE)))
             .put("rotation", JSONArray(SettingsRules.ROTATIONS.sorted()))
             .put("mjpegQuality", JSONArray(listOf(SettingsRules.MIN_QUALITY, SettingsRules.MAX_QUALITY)))
+            .put("exposureCompensation", exposure)
+            .put("sceneMode", sceneModes)
+            .put("iso", isoValues)
         return JSONObject().put("settings", settings).put("allowed", allowed)
     }
 

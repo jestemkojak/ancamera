@@ -11,6 +11,15 @@ class SettingsRulesTest {
             Facing.FRONT to listOf(Size(1280, 960), Size(640, 480)),
         ),
         maxFps = 30,
+        sceneModes = mapOf(
+            Facing.BACK to listOf("auto", "sports", "night"),
+            Facing.FRONT to listOf("portrait", "auto"),
+        ),
+        isoValues = mapOf(Facing.BACK to listOf("auto", "ISO100", "ISO800")),
+        exposure = mapOf(
+            Facing.BACK to ExposureRange(-12, 12, 1f / 6),
+            Facing.FRONT to ExposureRange(-2, 2, 0.5f),
+        ),
     )
     private val base = Settings()
 
@@ -160,6 +169,105 @@ class SettingsRulesTest {
         assertEquals(8554, s.rtspPort)
         assertEquals(8080, s.httpPort)
         assertEquals("", s.username)
+    }
+
+    @Test fun exposureDefaults() {
+        assertEquals(0, base.exposureCompensation)
+        assertEquals("auto", base.sceneMode)
+        assertEquals("auto", base.iso)
+    }
+
+    @Test fun exposureSettingsAreLive() {
+        val e = ok(mapOf("exposureCompensation" to -6))
+        assertEquals(-6, e.settings.exposureCompensation)
+        assertEquals(ApplyKind.LIVE, e.kind)
+        val scene = ok(mapOf("sceneMode" to "sports"))
+        assertEquals("sports", scene.settings.sceneMode)
+        assertEquals(ApplyKind.LIVE, scene.kind)
+        val iso = ok(mapOf("iso" to "ISO800"))
+        assertEquals("ISO800", iso.settings.iso)
+        assertEquals(ApplyKind.LIVE, iso.kind)
+        assertEquals(12, ok(mapOf("exposureCompensation" to 12L)).settings.exposureCompensation)
+        assertEquals(-12, ok(mapOf("exposureCompensation" to -12.0)).settings.exposureCompensation)
+    }
+
+    @Test fun exposureSettingsClassifiedLive() {
+        assertEquals(ApplyKind.LIVE, SettingsRules.classify(base, base.copy(exposureCompensation = 1)))
+        assertEquals(ApplyKind.LIVE, SettingsRules.classify(base, base.copy(sceneMode = "night")))
+        assertEquals(ApplyKind.LIVE, SettingsRules.classify(base, base.copy(iso = "ISO100")))
+        assertEquals(ApplyKind.NONE, ok(mapOf("sceneMode" to "auto", "iso" to "auto", "exposureCompensation" to 0)).kind)
+    }
+
+    @Test fun exposureSettingsWrongType() {
+        assertEquals("exposureCompensation", invalidField(mapOf("exposureCompensation" to "1")))
+        assertEquals("exposureCompensation", invalidField(mapOf("exposureCompensation" to 1.5)))
+        assertEquals("exposureCompensation", invalidField(mapOf("exposureCompensation" to null)))
+        assertEquals("sceneMode", invalidField(mapOf("sceneMode" to 1)))
+        assertEquals("iso", invalidField(mapOf("iso" to true)))
+    }
+
+    @Test fun exposureSettingsNotSupportedByCameraRejected() {
+        assertEquals("exposureCompensation", invalidField(mapOf("exposureCompensation" to 13)))
+        assertEquals("exposureCompensation", invalidField(mapOf("exposureCompensation" to -13)))
+        assertEquals("sceneMode", invalidField(mapOf("sceneMode" to "fireworks")))
+        assertEquals("iso", invalidField(mapOf("iso" to "ISO3200")))
+        val r = SettingsRules.applyPatch(base, mapOf("exposureCompensation" to 13), caps, fromWeb = true)
+        assertEquals("must be -12..12 for the back camera", (r as PatchResult.Invalid).reason)
+    }
+
+    @Test fun cameraSwitchResetsUnsupportedExposureSettings() {
+        val current = base.copy(exposureCompensation = 6, sceneMode = "sports", iso = "ISO800")
+        val r = ok(mapOf("camera" to "front"), current = current)
+        assertEquals(0, r.settings.exposureCompensation)
+        assertEquals("auto", r.settings.sceneMode)
+        assertEquals("auto", r.settings.iso)
+        val kept = ok(mapOf("camera" to "front"), current = base.copy(exposureCompensation = -2))
+        assertEquals(-2, kept.settings.exposureCompensation)
+    }
+
+    @Test fun cameraSwitchChecksExposureSettingsInPatchAgainstNewCamera() {
+        assertEquals("sceneMode", invalidField(mapOf("camera" to "front", "sceneMode" to "sports")))
+        assertEquals("iso", invalidField(mapOf("camera" to "front", "iso" to "ISO800")))
+        assertEquals("exposureCompensation", invalidField(mapOf("camera" to "front", "exposureCompensation" to 6)))
+        // Order in the patch does not matter: the check uses the final camera.
+        assertEquals("sceneMode", invalidField(linkedMapOf("sceneMode" to "sports", "camera" to "front")))
+        val r = ok(mapOf("camera" to "front", "sceneMode" to "portrait", "exposureCompensation" to 2))
+        assertEquals("portrait", r.settings.sceneMode)
+        assertEquals(2, r.settings.exposureCompensation)
+    }
+
+    @Test fun cameraWithNoListsAcceptsOnlyDefaults() {
+        val bare = Capabilities(mapOf(Facing.BACK to listOf(Size(1280, 720))))
+        fun patch(p: Map<String, Any?>) = SettingsRules.applyPatch(base, p, bare, fromWeb = true)
+        val same = patch(mapOf("sceneMode" to "auto", "iso" to "auto", "exposureCompensation" to 0))
+        assertEquals(ApplyKind.NONE, (same as PatchResult.Ok).kind)
+        assertEquals("sceneMode", (patch(mapOf("sceneMode" to "sports")) as PatchResult.Invalid).field)
+        assertEquals("iso", (patch(mapOf("iso" to "ISO100")) as PatchResult.Invalid).field)
+        assertEquals("exposureCompensation", (patch(mapOf("exposureCompensation" to 1)) as PatchResult.Invalid).field)
+        assertEquals(listOf("auto"), SettingsRules.sceneModes(bare, Facing.BACK))
+        assertEquals(listOf("auto"), SettingsRules.isoValues(bare, Facing.BACK))
+        assertEquals(ExposureRange(), SettingsRules.exposureRange(bare, Facing.BACK))
+    }
+
+    @Test fun defaultIsAlwaysInTheLists() {
+        val noAuto = caps.copy(sceneModes = mapOf(Facing.BACK to listOf("night")))
+        assertEquals(listOf("auto", "night"), SettingsRules.sceneModes(noAuto, Facing.BACK))
+        assertEquals(listOf("portrait", "auto"), SettingsRules.sceneModes(caps, Facing.FRONT))
+    }
+
+    @Test fun sanitizeResetsUnsupportedExposureSettings() {
+        val bad = Settings(exposureCompensation = 99, sceneMode = "fireworks", iso = "ISO3200")
+        val s = SettingsRules.sanitize(bad, caps)
+        assertEquals(0, s.exposureCompensation)
+        assertEquals("auto", s.sceneMode)
+        assertEquals("auto", s.iso)
+        val good = Settings(exposureCompensation = -6, sceneMode = "night", iso = "ISO100")
+        assertEquals(good, SettingsRules.sanitize(good, caps))
+        // The front camera has no ISO list and a smaller exposure range.
+        val front = SettingsRules.sanitize(good.copy(facing = Facing.FRONT, size = Size(640, 480)), caps)
+        assertEquals(0, front.exposureCompensation)
+        assertEquals("auto", front.sceneMode)
+        assertEquals("auto", front.iso)
     }
 
     @Test fun sanitizeKeepsGoodValues() {

@@ -20,6 +20,9 @@ class SettingsStore(context: Context) {
             httpPort = prefs.getInt("httpPort", d.httpPort),
             username = prefs.getString("username", d.username) ?: "",
             password = prefs.getString("password", d.password) ?: "",
+            exposureCompensation = prefs.getInt("exposureCompensation", d.exposureCompensation),
+            sceneMode = prefs.getString("sceneMode", d.sceneMode) ?: d.sceneMode,
+            iso = prefs.getString("iso", d.iso) ?: d.iso,
         )
     }
 
@@ -36,6 +39,9 @@ class SettingsStore(context: Context) {
             .putInt("httpPort", s.httpPort)
             .putString("username", s.username)
             .putString("password", s.password)
+            .putInt("exposureCompensation", s.exposureCompensation)
+            .putString("sceneMode", s.sceneMode)
+            .putString("iso", s.iso)
             .apply()
     }
 }

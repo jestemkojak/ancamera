@@ -13,7 +13,7 @@ object SettingsRules {
 
     /**
      * Applies a partial update. Keys: camera, size, fps, bitrate, rotation, torch,
-     * mjpegQuality, rtspPort, httpPort, username, password.
+     * mjpegQuality, rtspPort, httpPort, username, password, exposureCompensation, sceneMode, iso.
      * [fromWeb] = true blocks setting the first password (only the phone can do that).
      */
     fun applyPatch(
@@ -45,6 +45,10 @@ object SettingsRules {
                     s.copy(username = name)
                 }
                 "password" -> s.copy(password = value as? String ?: return PatchResult.Invalid(key, "must be text"))
+                "exposureCompensation" -> s.copy(exposureCompensation = intOf(value)
+                    ?: return PatchResult.Invalid(key, "must be a number"))
+                "sceneMode" -> s.copy(sceneMode = value as? String ?: return PatchResult.Invalid(key, "must be text"))
+                "iso" -> s.copy(iso = value as? String ?: return PatchResult.Invalid(key, "must be text"))
                 else -> return PatchResult.Invalid(key, "unknown setting")
             }
         }
@@ -67,6 +71,13 @@ object SettingsRules {
             }
         }
 
+        // The same for the exposure settings: a value that the camera does not have is an error
+        // when the patch sets it. Otherwise (a camera change) it goes back to the default.
+        for (key in unsupportedExposureKeys(s, caps)) {
+            if (patch.containsKey(key)) return PatchResult.Invalid(key, exposureReason(key, s.facing, caps))
+            s = resetToDefault(s, key)
+        }
+
         fieldError(s, caps)?.let { return it }
         return PatchResult.Ok(s, classify(current, s))
     }
@@ -86,6 +97,7 @@ object SettingsRules {
         if (caps.sizes[s.facing].isNullOrEmpty()) s = s.copy(facing = caps.facings.firstOrNull() ?: d.facing)
         val sizes = caps.sizes[s.facing].orEmpty()
         if (sizes.isNotEmpty() && s.size !in sizes) s = s.copy(size = closestSize(sizes, d.size))
+        for (key in unsupportedExposureKeys(s, caps)) s = resetToDefault(s, key)
         return s
     }
 
@@ -95,8 +107,53 @@ object SettingsRules {
         old.facing != new.facing || old.size != new.size || old.fps != new.fps ||
             old.rotation != new.rotation -> ApplyKind.STREAM_RESTART
         old.bitrate != new.bitrate || old.torch != new.torch ||
-            old.mjpegQuality != new.mjpegQuality -> ApplyKind.LIVE
+            old.mjpegQuality != new.mjpegQuality || exposureChanged(old, new) -> ApplyKind.LIVE
         else -> ApplyKind.NONE
+    }
+
+    /** True when one of the exposure settings (exposureCompensation, sceneMode, iso) changed. */
+    fun exposureChanged(old: Settings, new: Settings): Boolean =
+        old.exposureCompensation != new.exposureCompensation || old.sceneMode != new.sceneMode || old.iso != new.iso
+
+    /** Scene modes of the [facing] camera. The default is always in the list. */
+    fun sceneModes(caps: Capabilities, facing: Facing): List<String> =
+        withDefault(caps.sceneModes[facing].orEmpty(), Settings().sceneMode)
+
+    /** ISO values of the [facing] camera. The default is always in the list. */
+    fun isoValues(caps: Capabilities, facing: Facing): List<String> =
+        withDefault(caps.isoValues[facing].orEmpty(), Settings().iso)
+
+    /** Exposure compensation range of the [facing] camera. No data gives 0..0 (only the default). */
+    fun exposureRange(caps: Capabilities, facing: Facing): ExposureRange = caps.exposure[facing] ?: ExposureRange()
+
+    private fun withDefault(values: List<String>, default: String): List<String> =
+        if (default in values) values else listOf(default) + values
+
+    /** Keys of the exposure settings in [s] that the current camera does not support. */
+    private fun unsupportedExposureKeys(s: Settings, caps: Capabilities): List<String> {
+        val out = ArrayList<String>(3)
+        val range = exposureRange(caps, s.facing)
+        if (s.exposureCompensation != Settings().exposureCompensation && s.exposureCompensation !in range.min..range.max) {
+            out.add("exposureCompensation")
+        }
+        if (s.sceneMode !in sceneModes(caps, s.facing)) out.add("sceneMode")
+        if (s.iso !in isoValues(caps, s.facing)) out.add("iso")
+        return out
+    }
+
+    private fun exposureReason(key: String, facing: Facing, caps: Capabilities): String = when (key) {
+        "exposureCompensation" -> exposureRange(caps, facing).let { "must be ${it.min}..${it.max} for the ${facing.wire} camera" }
+        else -> "not supported by the ${facing.wire} camera"
+    }
+
+    private fun resetToDefault(s: Settings, key: String): Settings {
+        val d = Settings()
+        return when (key) {
+            "exposureCompensation" -> s.copy(exposureCompensation = d.exposureCompensation)
+            "sceneMode" -> s.copy(sceneMode = d.sceneMode)
+            "iso" -> s.copy(iso = d.iso)
+            else -> s
+        }
     }
 
     fun closestSize(sizes: List<Size>, target: Size): Size =
