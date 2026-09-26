@@ -56,10 +56,12 @@ SECONDS_TOTAL=$((MINUTES * 60))
 echo "screen off, battery ${T0} °C, counting frames from $R for $MINUTES min"
 poll >"$LOG/status.log" &
 PIDS+=($!)
+# -nostdin: timeout puts ffmpeg in a background process group. Without -nostdin, ffmpeg reads the
+# terminal for its keys, gets SIGTTIN and stops before it connects, so the run counts 0 frames.
 # -timeout (10 s, in microseconds): a stream that stops sending data ends ffmpeg with an error.
 # Without it, ffmpeg waits with no frames until the outer timeout.
 START=$SECONDS
-timeout $((SECONDS_TOTAL + 60)) ffmpeg -v error -timeout 10000000 -rtsp_transport tcp -i "$R" -an \
+timeout $((SECONDS_TOTAL + 60)) ffmpeg -nostdin -v error -timeout 10000000 -rtsp_transport tcp -i "$R" -an \
   -t "$SECONDS_TOTAL" -f null - -progress "$LOG/progress.txt" 2>"$LOG/ffmpeg.log"
 RC=$?
 ELAPSED=$((SECONDS - START))
