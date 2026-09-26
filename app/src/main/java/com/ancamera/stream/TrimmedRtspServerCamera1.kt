@@ -3,6 +3,7 @@ package com.ancamera.stream
 import android.content.Context
 import android.media.MediaCodec
 import android.os.Build
+import android.util.Log
 import androidx.annotation.RequiresApi
 import com.pedro.common.AudioCodec
 import com.pedro.common.ConnectChecker
@@ -30,6 +31,8 @@ import java.nio.ByteBuffer
 class TrimmedRtspServerCamera1 : Camera1Base {
 
     private val rtspServer: RtspServer
+    // Only the encoder output thread uses this counter.
+    private var droppedFrames = 0L
 
     @RequiresApi(api = Build.VERSION_CODES.JELLY_BEAN_MR2)
     constructor(context: Context, connectChecker: ConnectChecker, port: Int) : super(context) {
@@ -66,9 +69,17 @@ class TrimmedRtspServerCamera1 : Camera1Base {
     // Trims the frame out of the encoder's output buffer before it reaches the library, so the
     // library never copies the unused rest of the buffer. The trimmed buffer starts at the frame,
     // so its own BufferInfo carries offset 0. size, presentationTimeUs and flags come from
-    // [info]. This copy of info does not change the encoder's own [info].
+    // [info]. This copy of info does not change the encoder's own [info]. A frame whose range is
+    // not in the buffer is dropped.
     override fun getVideoDataImp(videoBuffer: ByteBuffer, info: MediaCodec.BufferInfo) {
-        val trimmed = trimFrame(videoBuffer, info.offset, info.size)
+        val trimmed = trimFrame(videoBuffer, info.offset, info.size) ?: run {
+            droppedFrames++
+            if (droppedFrames == 1L || droppedFrames % 100 == 0L) {
+                Log.w(TAG, "dropped $droppedFrames video frame(s) with a bad range: offset ${info.offset}, " +
+                    "size ${info.size}, capacity ${videoBuffer.capacity()}")
+            }
+            return
+        }
         val trimmedInfo = MediaCodec.BufferInfo().apply {
             set(0, info.size, info.presentationTimeUs, info.flags)
         }
@@ -83,5 +94,9 @@ class TrimmedRtspServerCamera1 : Camera1Base {
 
     override fun setAudioCodecImp(codec: AudioCodec) {
         rtspServer.setAudioCodec(codec)
+    }
+
+    companion object {
+        private const val TAG = "TrimmedRtspCamera"
     }
 }

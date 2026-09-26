@@ -13,11 +13,15 @@ import java.nio.ByteBuffer
  * write to [buffer] until it is done with the returned view. It does not change the position or
  * limit of [buffer].
  *
- * The returned buffer has position 0 and limit == [size].
+ * The returned buffer has position 0 and limit == [size]. If the frame range is not fully in the
+ * buffer capacity, the function returns null, and the caller must drop the frame.
  */
-fun trimFrame(buffer: ByteBuffer, offset: Int, size: Int): ByteBuffer {
+fun trimFrame(buffer: ByteBuffer, offset: Int, size: Int): ByteBuffer? {
+    // Long math: offset + size must not overflow.
+    if (offset < 0 || size < 0 || offset.toLong() + size > buffer.capacity()) return null
     val view = buffer.duplicate()
-    view.position(offset)
+    // Set the limit before the position: the position must not be more than the limit.
     view.limit(offset + size)
+    view.position(offset)
     return view.slice()
 }
