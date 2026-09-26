@@ -18,6 +18,9 @@
   button { grid-column: 1 / 3; background: #2d5; color: #000; border: 0; font-weight: bold; cursor: pointer; }
   #message { grid-column: 1 / 3; min-height: 1.4em; }
   .auth { display: none; }
+  .row { display: flex; gap: 8px; align-items: center; }
+  .row input { flex: 1; min-width: 0; }
+  #ev { color: #aaa; min-width: 4.5em; }
   .links { font-size: 13px; color: #aaa; word-break: break-all; }
 </style>
 </head>
@@ -33,6 +36,10 @@
     <label for="bitrate">Bitrate (bit/s)</label><input id="bitrate" type="number" step="100000">
     <label for="rotation">Rotation</label><select id="rotation"></select>
     <label for="torch">Torch</label><input id="torch" type="checkbox">
+    <label for="sceneMode">Scene mode</label><select id="sceneMode"></select>
+    <label for="iso">ISO</label><select id="iso"></select>
+    <label for="exposureCompensation">Exposure compensation</label>
+    <div class="row"><input id="exposureCompensation" type="number" step="1"><span id="ev"></span></div>
     <label for="mjpegQuality">MJPEG quality</label><input id="mjpegQuality" type="number">
     <label for="rtspPort">RTSP port</label><input id="rtspPort" type="number" min="1024" max="65535">
     <label for="httpPort">HTTP port</label><input id="httpPort" type="number" min="1024" max="65535">
@@ -71,6 +78,24 @@
     }
   }
 
+  // Scene modes, ISO values and the exposure range are different for each camera.
+  function fillExposure(camera) {
+    var range = allowed.exposureCompensation[camera] || { min: 0, max: 0, step: 0 };
+    var modes = allowed.sceneMode[camera] || ['auto'], isos = allowed.iso[camera] || ['auto'];
+    // A value that the other camera does not have goes back to 'auto', as on the phone.
+    fillSelect($('sceneMode'), modes, modes.indexOf(current.sceneMode) >= 0 ? current.sceneMode : 'auto');
+    fillSelect($('iso'), isos, isos.indexOf(current.iso) >= 0 ? current.iso : 'auto');
+    $('exposureCompensation').min = range.min;
+    $('exposureCompensation').max = range.max;
+    showEv();
+  }
+
+  function showEv() {
+    var range = allowed.exposureCompensation[$('camera').value] || { step: 0 };
+    var v = parseInt($('exposureCompensation').value, 10);
+    $('ev').textContent = isNaN(v) ? '' : (v * range.step >= 0 ? '+' : '') + (v * range.step).toFixed(1) + ' EV';
+  }
+
   function showSettings(data) {
     current = data.settings; allowed = data.allowed;
     fillSelect($('camera'), allowed.camera, current.camera);
@@ -80,6 +105,8 @@
     $('fps').value = current.fps;
     $('bitrate').value = current.bitrate;
     $('torch').checked = current.torch;
+    $('exposureCompensation').value = current.exposureCompensation;
+    fillExposure(current.camera);
     $('mjpegQuality').min = allowed.mjpegQuality[0];
     $('mjpegQuality').max = allowed.mjpegQuality[1];
     $('mjpegQuality').value = current.mjpegQuality;
@@ -114,13 +141,17 @@
 
   $('camera').onchange = function () {
     fillSelect($('size'), allowed.size[$('camera').value] || [], current.size);
+    fillExposure($('camera').value);
   };
+  $('exposureCompensation').oninput = showEv;
 
   $('form').onsubmit = function (e) {
     e.preventDefault();
-    var patch = {}, numbers = ['fps', 'bitrate', 'mjpegQuality', 'rtspPort', 'httpPort', 'rotation'];
+    var patch = {}, numbers = ['fps', 'bitrate', 'mjpegQuality', 'rtspPort', 'httpPort', 'rotation', 'exposureCompensation'];
     if ($('camera').value !== current.camera) patch.camera = $('camera').value;
     if ($('size').value !== current.size) patch.size = $('size').value;
+    if ($('sceneMode').value !== current.sceneMode) patch.sceneMode = $('sceneMode').value;
+    if ($('iso').value !== current.iso) patch.iso = $('iso').value;
     for (var i = 0; i < numbers.length; i++) {
       var v = parseInt($(numbers[i]).value, 10);
       if (v !== current[numbers[i]]) patch[numbers[i]] = v;

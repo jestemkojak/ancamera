@@ -13,7 +13,9 @@ Turn an old Android phone (Android 4.4+) into a LAN monitoring camera.
 1. Install the APK and open **ancamera**.
 2. Optional: set a username and password. RTSP and the web page then need them (`rtsp://user:pass@<phone-ip>:8554/`).
 3. Push **Start**. The stream continues when the screen is off. Keep the phone on a charger.
-4. Open the web page to change the camera, resolution, fps, bitrate, rotation or torch.
+4. Open the web page to change the camera, resolution, fps, bitrate, rotation, torch, scene mode, ISO or exposure compensation.
+
+In low light the camera lowers the frame rate. `sceneMode` `sports` or `action`, a fixed `iso`, or a negative `exposureCompensation` can keep it higher, with a darker or noisier picture.
 
 The first password can be set only on the phone. After that, the web page can change it.
 
