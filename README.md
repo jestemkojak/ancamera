@@ -8,9 +8,11 @@ Turn an old Android phone (Android 4.4+) into a LAN monitoring camera.
 - **Snapshot:** `http://<phone-ip>:8080/snapshot.jpg`.
 - **Status and settings API:** `GET /api/status`, `GET /api/settings`, `POST /api/settings` (partial JSON).
 
+Tested only on an LG G3. Other phones can behave differently.
+
 ## Use
 
-1. Install the APK and open **ancamera**.
+1. Build the APK (see [Build](#build)), install it and open **ancamera**. There is no APK to download.
 2. Optional: set a username and password. RTSP and the web page then need them (`rtsp://user:pass@<phone-ip>:8554/`).
 3. Push **Start**. The stream continues when the screen is off. Keep the phone on a charger.
 4. Open the web page to change the camera, resolution, fps, bitrate, rotation, torch, scene mode, ISO or exposure compensation.
@@ -20,6 +22,7 @@ In low light the camera lowers the frame rate. A fixed `iso` (for example `ISO80
 The first password can be set only on the phone. After that, the web page can change it.
 
 The web server accepts only LAN clients, but the RTSP server does not filter addresses, so keep the phone on a private network.
+There is no TLS. Basic auth sends the username and password without encryption, so other devices on the network can read them.
 
 ### Low-latency viewing
 
@@ -55,3 +58,7 @@ For the real soak test, give the phone's Wi-Fi IP. Without it, `soak.sh` reads t
 
 Do not use an API 19 emulator for video tests: its H.264 encoder does not work.
 Design: `docs/superpowers/specs/2026-09-25-ancamera-design.md`.
+
+## License
+
+MIT. See [LICENSE](LICENSE).
